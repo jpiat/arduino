@@ -5,6 +5,14 @@ The purpose of this demos is to demonstrate data communication using a pair of b
 Communication can go at up to 600bs (can depend on led quality) 
 
 
+Hardware is the following :
+
+
+I/O 13 ------------- led -------------- GND
+
+Using a blue led should not require resistor, one may be needed for red or green
+
+
 A byte is sent as follow :
 
 Start(0) 8bit data Stop(1)
@@ -17,9 +25,9 @@ Each bit is coded in manchester with
 A data frame is formatted as follow :
 
 0x55 or 0xAA : sent a number of time to help the received compute a signal average for the thresholding of analog values
-0xD5 : synchronization bbyte to indicate start of a frame
+0xD5 : synchronization byte to indicate start of a frame
 0x02 : STX start of frame
-N times Effective data excluding command symbols)
+N times Effective data excluding command symbols
 0x03 : ETX end of frame
 */
 

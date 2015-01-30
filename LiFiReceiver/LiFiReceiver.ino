@@ -5,6 +5,11 @@ The purpose of this demos is to demonstrate data communication using a pair of b
 Communication can go at up to 600bs (can depend on led quality) 
 
 
+Receiver hardware :
+
+         |----1Mohm-----|
+A0 ------|--- +led- ----|-------GND 
+
 A byte is sent as follow :
 
 Start(0) 8bit data Stop(1), LSB first : 0 b0 b1 b2 b3 b4 b5 b6 b7 1
