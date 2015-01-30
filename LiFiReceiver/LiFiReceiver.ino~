@@ -1,0 +1,408 @@
+/*
+  Analog Input
+ Demonstrates analog input by reading an analog sensor on analog pin 0 and
+ turning on and off a light emitting diode(LED)  connected to digital pin 13. 
+ The amount of time the LED will be on and off depends on
+ the value obtained by analogRead(). 
+ 
+ The circuit:
+ * Potentiometer attached to analog input 0
+ * center pin of the potentiometer to the analog pin
+ * one side pin (either one) to ground
+ * the other side pin to +5V
+ * LED anode (long leg) attached to digital output 13
+ * LED cathode (short leg) attached to ground
+ 
+ * Note: because most Arduinos have a built-in LED attached 
+ to pin 13 on the board, the LED is optional.
+ 
+ 
+ Created by David Cuartielles
+ modified 30 Aug 2011
+ By Tom Igoe
+ 
+ This example code is in the public domain.
+ 
+ http://arduino.cc/en/Tutorial/AnalogInput
+ 
+ */
+
+//#define TRANSMITER 1 
+ 
+
+#define SENSOR_PIN A0
+
+int sensorValue = 0;  // variable to store the value coming from the sensor
+
+#define SYNC_SYMBOL 0xD5
+#define ETX 0x03
+#define STX 0x02
+
+
+char * msg = "\xAA\xD5\x02Visible Light Communication (VLC) vise à établir une communication de données à l'aide de l'éclairage ambiant\x03" ;
+
+int msg_length = strlen(msg);
+int msg_index = 0 ;
+
+#define ACC_LENGTH 16
+
+#define LED_PIN 13
+//Fast manipulation of LED IO. 
+#define SET_LED() PORTB |= (1 << 5)
+#define CLR_LED() PORTB &= ~(1 << 5)
+
+
+//state variables of the manchester encoder
+unsigned char bit_counter = 0 ;
+unsigned short data_word = 0 ;  //8bit data + start + stop
+unsigned char half_bit = 0 ;
+
+//state variables of the thresholder
+unsigned int signal_mean = 0 ;
+unsigned long acc_sum = 0 ;
+unsigned int acc_counter = 0 ;
+
+//manechester decoder state variable
+long shift_reg = 0;
+
+//frame receiver state variables
+int synced = -1 ;
+int received_bit = 0 ;
+
+
+char pin_state = 0 ;
+#define WORD_LENGTH 10
+
+struct myFifo{
+  int data [ACC_LENGTH];
+  unsigned int fifo_size ;
+  unsigned int write_index ;
+  unsigned int read_index ;
+  unsigned int nb_available ; 
+};
+
+struct myFifo samples_fifo ;
+
+void init_fifo(struct myFifo * pf, unsigned int f_size){
+   pf -> fifo_size = f_size ;
+   pf -> write_index = 0 ;
+   pf -> read_index = 0 ;
+   pf -> nb_available = 0 ;
+ }
+
+
+inline char read_fifo(struct myFifo * pf, int * token){
+  if(pf->nb_available == 0) return -1 ;
+  *token = pf->data[pf->read_index]  ;
+  pf->read_index = pf->read_index + 1;
+  if(pf->read_index >= pf->fifo_size) pf->read_index = 0 ;
+  pf->nb_available = pf->nb_available -1 ;
+  return 0 ;
+  
+}
+
+inline char peek_fifo(struct myFifo * pf, int * token){
+  if(pf->nb_available == 0) return -1 ;
+  *token = pf->data[pf->read_index]  ;
+  return 0 ;
+  
+}
+
+inline char write_fifo(struct myFifo * pf, int  token){
+  if(pf->nb_available >= pf->fifo_size) return -1 ;
+  pf->data[pf->write_index] = token ;
+  pf->write_index = pf->write_index + 1;
+  if(pf->write_index >= pf->fifo_size) pf->write_index = 0 ;
+  pf->nb_available = pf->nb_available + 1 ;
+  return 0 ;
+}
+
+//receiver interrupt
+ISR(TIMER1_COMPA_vect){
+  int sensorValue = analogRead(SENSOR_PIN);
+  int i = 0;
+  acc_sum = acc_sum +  sensorValue; 
+  acc_counter = acc_counter + 1 ;
+  if(acc_counter >= 32){
+    signal_mean = acc_sum / 32 ;
+    acc_counter = 0 ;
+    acc_sum = 0 ;
+  }
+  if(signal_mean > 0){
+ 	 write_fifo(&samples_fifo, sensorValue);//wait for the thresholding to be stable
+  }
+  /*if(pin_state == 0){ // for debug purpose, only to make sur the sampling rate is the one expected
+      digitalWrite(12, LOW);
+      pin_state = 1 ;
+  }else{
+      digitalWrite(12, HIGH);
+      pin_state = 0 ;
+  }*/
+}
+
+//emitter interrupt
+ISR(TIMER2_COMPA_vect){
+  if(bit_counter > 0){ // if there is bits to send
+    unsigned char data_bit = (data_word >> (WORD_LENGTH - bit_counter) ) & 0x01 ; //LSB first  
+    if(!half_bit){ // first half of the bit (manchester encoding)
+      if(data_bit){
+          CLR_LED();
+      }else{
+          SET_LED();
+      }
+      half_bit = 1 ;
+    }else{ // second half of the bit (manchester encoding)
+      if(data_bit){
+          SET_LED();
+      }else{
+          CLR_LED();
+      }
+      half_bit = 0 ;
+      bit_counter -- ;
+    }
+  }else{ // keep sending ones if there is nothing to send
+      if(!half_bit){ // first half of the bit (manchester encoding)
+      CLR_LED();
+      half_bit = 1 ;
+    }else{// second half of the bit (manchester encoding)
+      SET_LED();
+      half_bit = 0 ;
+    }
+    
+  }
+  
+  
+}
+
+void setupTimer1(unsigned char prescaler, unsigned int period){
+  TCCR1A = 0;// set entire TCCR1A register to 0
+  TCCR1B = 0;// same for TCCR1B
+  TCNT1  = 0;//initialize counter value to 0
+  // set compare match register for 1hz increments
+  OCR1A = period;// = (16*10^6) / (1*1024) - 1 (must be <65536)
+  // turn on CTC mode
+  TCCR1B |= (1 << WGM12);
+  switch(prescaler){
+    case 0 :
+      // Set CS20 bit for no prescaler
+      TCCR1B |= (1 << CS10);
+    case 1 :
+      // Set CS21 bit for 8 prescaler
+      TCCR1B |= (1 << CS11);
+    case 2 :
+      // Set CS21 bit for 64 prescaler
+      TCCR1B |= (1 << CS11) | (1 << CS10);
+      break ;   
+    case 3 :
+      // Set CS21 bit for 256 prescaler
+      TCCR1B |= (1 << CS12) ;
+      break ; 
+    case 4 :
+      // Set CS21 bit for 1024 prescaler
+      TCCR1B |= (1 << CS12) | (1 << CS10);
+      break ; 
+    default :
+      TCCR1B |= (1 << CS10);
+      break ;
+      
+  } 
+  // enable timer compare interrupt
+  TIMSK1 |= (1 << OCIE1A);
+}
+
+//Transmission is performed at 1kbit, but manchester encoding requires to cycler per symbol hence 2khz interrupt
+//period should be 125 for 2khz
+void setupTimer2(unsigned char prescaler, unsigned int period){
+  TCCR2A = 0;// set entire TCCR2A register to 0
+  TCCR2B = 0;// same for TCCR2B
+  TCNT2  = 0;//initialize counter value to 0
+  // set compare match register for 8khz increments
+  OCR2A = period;// = (16*10^6) / (8000*8) - 1 (must be <256)
+  // turn on CTC mode
+  TCCR2A |= (1 << WGM21);
+  
+  switch(prescaler){
+    case 0 :
+      // Set CS20 bit for no prescaler
+      TCCR2B |= (1 << CS20);
+    case 1 :
+      // Set CS21 bit for 8 prescaler
+      TCCR2B |= (1 << CS21);
+    case 2 :
+      // Set CS21 bit for 64 prescaler
+      TCCR2B |= (1 << CS21) | (1 << CS20);
+      break ;   
+    case 3 :
+      // Set CS21 bit for 128 prescaler
+      TCCR2B |= (1 << CS22) ;
+      break ; 
+    case 4 :
+      // Set CS21 bit for 256 prescaler
+      TCCR2B |= (1 << CS22) | (1 << CS21);
+      break ; 
+     case 5 :
+      // Set CS21 bit for 1024 prescaler
+      TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);
+      break ;  
+    default :
+      TCCR2B |= (1 << CS20);
+      break ;
+      
+  }
+  // enable timer compare interrupt
+  TIMSK2 |= (1 << OCIE2A); 
+  
+}
+
+
+int detect_symbol(long * data_reg){
+  unsigned char bit_val, prev_bit_val = 2 ;
+  unsigned int same_counter = 0 ;
+  int sample_val ;
+  if(samples_fifo.nb_available < 10) return -1 ;
+  while(same_counter < 10 ){
+    peek_fifo(&samples_fifo, &sample_val);
+    bit_val = sample_val > signal_mean ? 1 : 0 ;
+    //Serial.print(bit_val , BIN);
+    if(bit_val == prev_bit_val){
+      read_fifo(&samples_fifo, &sample_val);
+      same_counter ++ ;
+    }else{
+      if(same_counter >= 2 ){ // at least 2 bit with same val for a reliable data
+        *data_reg = (*data_reg << 1) | prev_bit_val ;
+         if(same_counter >= 5){ // at least 6 bit with same val for a reliable data
+            *data_reg = (*data_reg << 1) | prev_bit_val ;
+            return 2 ; // two symbol found
+         }
+         return 1 ; // one symbol found
+      }
+      read_fifo(&samples_fifo, &sample_val);
+      same_counter ++ ;
+    }
+    prev_bit_val = bit_val ;
+  }
+  return -1 ;
+}
+
+int send_symbol(unsigned char data){
+   if(bit_counter > 0) return -1 ;
+   //           DATAT | START - STOP            
+   data_word = (data << 1) | 0 | (1 << (WORD_LENGTH-1));
+   //Serial.println(data_word, BIN);
+   while(half_bit); // wait for sender to be in sync, sending of the first half of the symbol
+   bit_counter = WORD_LENGTH ;
+   return 0 ;
+}
+
+
+char get_data(long data_reg, char *data){
+  char received_data = 0;
+  if((data_reg & 0x03) == 0x01){
+       if(((data_reg >> 18) & 0x03) == 0x02){
+           int i  ;
+           received_data = 0 ;
+           for(i = 2 ; i < 18 ; i = i + 2){
+             received_data = received_data << 1 ;
+             if(((data_reg >> i) & 0x03) == 0x01){
+                 received_data |= 0x01 ;
+             }else{
+                 received_data &= ~0x01 ;
+             } 
+           }
+           *data = received_data ;
+          return 1 ;
+       }else{
+           return -1 ;
+       }
+     }else{
+           return -1 ;
+     }
+     return -1 ;
+}
+
+
+// the setup routine runs once when you press reset:
+void setup() {
+  // initialize serial communication at 115200 bits per second:
+  int i; 
+  
+ init_fifo(&samples_fifo, ACC_LENGTH);
+  Serial.begin(115200);
+  analogReference(INTERNAL); // internal reference is 1.1v, should give better accuracy for the mv range of the led output.
+  pinMode(13, OUTPUT);  
+  pinMode(12, OUTPUT); 
+  cli();//stop interrupts
+  setupTimer1(3, 13); // 4 time the transmitter clock
+  setupTimer2(4, 52); // transmitter rate = 16_000_000/256/52 
+  sei();//allow interrupts
+
+}
+
+
+int detect_syn(long reg){
+	int i  ;
+        char data ;
+	for(i = 0; i < 8 ; i ++){
+	 if(get_data(shiftregreg>>i, &data)  >= 0){
+	   if((data & 0xFF) == SYNC_SYMBOL){
+	     Serial.println("\nsynced!");
+	     return i ;
+	   }
+	 }
+	}
+	return -1 ;
+}
+
+// the loop routine runs over and over again forever:
+void loop() {
+  int sym ;
+  int i; 
+  char received_data ;
+  if(send_symbol(msg[msg_index]) >= 0){
+     msg_index ++ ;
+     if(msg_index >= msg_length) msg_index = 0 ;
+  }
+  //send_symbol(0x04);
+  sym = detect_symbol(&shift_reg);
+  //if(signal_mean != 0) Serial.println(signal_mean);
+  if(sym >= 0){
+     //Serial.println(shift_reg , BIN);
+     if(synced < 0 ){
+       sync = detect_sync(shift_reg);
+	if(sync >= 0) received_bit = 20 ;
+     }else{
+       if(received_bit > 0 )received_bit =  received_bit - sym ;
+       if(received_bit <= 0){
+         if(received_bit < 0){
+           if(get_data(shift_reg>>(synced+1), &received_data) < 0){
+            synced = -1 ;  
+           }else{
+              if(received_data == ETX){
+                synced = -1 ;
+              }else{
+                if(received_data != 0x02){  
+                  Serial.print(received_data);
+                }
+                received_bit = 20 ;
+              }
+           }
+         }else{
+           if(get_data(shift_reg>>synced, &received_data) < 0){
+            synced = -1 ;  
+           }else{
+              if(received_data == ETX){
+                synced = -1 ;
+              }else{
+                if(received_data != 0x02){  
+                  Serial.print(received_data);
+                }
+                received_bit = 20 ;
+              }
+           }
+         }
+         
+       }
+     }
+  }
+
+}
