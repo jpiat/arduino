@@ -109,13 +109,17 @@ void setupTimer2(unsigned char prescaler, unsigned int period){
       TCCR2B |= (1 << CS22) ;
       break ; 
     case 4 :
-      // Set CS21 bit for 256 prescaler
-      TCCR2B |= (1 << CS22) | (1 << CS21);
+      // Set CS21 bit for 128 prescaler
+      TCCR2B |= (1 << CS22) | (1 << CS20);
       break ; 
      case 5 :
+      // Set CS21 bit for 256 prescaler
+      TCCR2B |= (1 << CS22) | (1 << CS21) ;
+      break ;
+    case 6 :
       // Set CS21 bit for 1024 prescaler
       TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);
-      break ;  
+      break ;    
     default :
       TCCR2B |= (1 << CS20);
       break ;
