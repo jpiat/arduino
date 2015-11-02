@@ -24,25 +24,35 @@ Each bit is coded in manchester with
 
 A data frame is formatted as follow :
 
-0x55 or 0xAA : sent a number of time to help the received compute a signal average for the thresholding of analog values
-0xD5 : synchronization byte to indicate start of a frame
+0xAA : sent a number of time to help the received compute a signal average for the thresholding of analog values
+0xD5 : synchronization byte to break preamble
 0x02 : STX start of frame
-N times Effective data excluding command symbols
+N times Effective data excluding command symbols, with N < 32
 0x03 : ETX end of frame
 */
 
 //Start of what should be an include ...
 #define WORD_LENGTH 10
-#define LED_PIN 13
+#define SYNC_SYMBOL 0xD5
+#define ETX 0x03
+#define STX 0x02
+
 //Fast manipulation of LED IO. 
+//These defines are for a LED connected on D13
+/*#define OUT_LED() DDRB |= (1 << 5);
 #define SET_LED() PORTB |= (1 << 5)
 #define CLR_LED() PORTB &= ~(1 << 5)
+*/
+
+//These defines are for a RGB led connected to D2, D3, D4
+#define OUT_LED() DDRD |= ((1 << 2) | (1 << 3) | (1 << 4))
+#define SET_LED() PORTD |= ((1 << 2) | (1 << 3) | (1 << 4))
+#define CLR_LED() PORTD &= ~((1 << 2) | (1 << 3) | (1 << 4))
 
 
-char * msg = "\xAA\xD5\x02Visible Light Communication est une liaison de donnees utilisant l'eclairage ambiant\x03" ;
-
-int msg_length = strlen(msg);
-int msg_index = 0 ;
+char frame_buffer [38] ; //buffer for frame
+int frame_index = -1; // index in frame
+int frame_size = -1  ; // size of the frame to be sent
 
 //state variables of the manchester encoder
 unsigned char bit_counter = 0 ;
@@ -58,7 +68,6 @@ ISR(TIMER2_COMPA_vect){
     #endif
     if(!half_bit){ // first half of the bit (manchester encoding)
       if(data_bit){
-          
           CLR_LED();
       }else{
           SET_LED();
@@ -72,6 +81,18 @@ ISR(TIMER2_COMPA_vect){
       }
       half_bit = 0 ;
       bit_counter -- ;
+      if(bit_counter == 0){
+        frame_index ++ ;   
+        //is there still bytes to send in the frame ?
+        if(frame_index < frame_size){
+          data_word = (frame_buffer[frame_index] << 1) | 0 | (1 << (WORD_LENGTH-1));
+          bit_counter = WORD_LENGTH ;
+        }else{
+          //not more bytes setting indexes to -1
+          frame_index = -1 ;
+          frame_size = -1 ;
+        }
+      }
     }
   }else{ // keep sending ones if there is nothing to send
       if(!half_bit){ // first half of the bit (manchester encoding)
@@ -80,6 +101,11 @@ ISR(TIMER2_COMPA_vect){
     }else{// second half of the bit (manchester encoding)
       SET_LED();
       half_bit = 0 ;
+      //Transmitter was IDLE and a new frame is ready to send
+      if(frame_index < frame_size){      
+          data_word = (frame_buffer[frame_index] << 1) | 0 | (1 << (WORD_LENGTH-1));
+          bit_counter = WORD_LENGTH ;
+      }
     } 
   }
 }
@@ -131,14 +157,25 @@ void setupTimer2(unsigned char prescaler, unsigned int period){
 }
 
 
-int send_symbol(unsigned char data){
-   if(bit_counter > 0) return -1 ;
-   //           DATAT | START - STOP            
-   data_word = (data << 1) | 0 | (1 << (WORD_LENGTH-1));
-   //Serial.println(data_word, BIN);
-   while(half_bit); // wait for sender to be in sync, sending of the first half of the symbol
-   bit_counter = WORD_LENGTH ;
-   return 0 ;
+void init_frame(char * frame){
+  memset(frame, 0xAA, 3);
+  frame[3] = SYNC_SYMBOL ;
+  frame[4] = STX;
+  frame_index = -1 ;
+  frame_size = -1 ;
+}
+
+int create_frame(char * data, int data_size, char * frame){
+  memcpy(&(frame[5]), data, data_size);
+  frame[5+data_size] = ETX;
+  return 1 ;
+}
+
+int write(char * data, int data_size){
+  if(frame_index > 0) return -1 ;
+  create_frame(data, data_size,frame_buffer);
+  frame_index = 0 ;
+  frame_size = data_size + 6 ;
 }
 
 
@@ -146,10 +183,10 @@ int send_symbol(unsigned char data){
 void setup() {
   // initialize serial communication at 115200 bits per second:
   Serial.begin(115200);
-  pinMode(13, OUTPUT);  
-  pinMode(12, OUTPUT); 
+  OUT_LED();
+  init_frame(frame_buffer);
   cli();//stop interrupts
-  setupTimer2(4, 48); // transmitter rate = 16_000_000/256/52 
+  setupTimer2(5, 48); // transmitter rate = 16_000_000/256/52 
   //setupTimer2(5, 255);
   sei();//allow interrupts
 
@@ -158,8 +195,6 @@ void setup() {
 
 // the loop routine runs over and over again forever:
 void loop() {
-  if(send_symbol(msg[msg_index]) >= 0){
-     msg_index ++ ;
-     if(msg_index >= msg_length) msg_index = 0 ;
-  }
+  write("Hello World", 11);
+  delay(2);
 }

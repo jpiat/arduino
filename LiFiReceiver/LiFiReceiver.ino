@@ -22,10 +22,10 @@ time is from left to right
 
 A data frame is formatted as follow :
 
-0x55 or 0xAA : sent a number of time to help the receiver compute a signal average for the thresholding of analog values
+0xAA : sent a number of time to help the receiver compute a signal average for the thresholding of analog values
 0xD5 : synchronization byte to indicate start of a frame, breaks the regularity of the 0x55 pattern to be easily 
 0x02 : STX start of frame
-N times Effective data excluding command symbols)
+N times Effective data excluding command symbols, max length 32 bytes
 0x03 : ETX end of frame
 */
 
@@ -76,7 +76,7 @@ inline char write_fifo(struct myFifo * pf, int  token){
 }
 //end of fifo include
 
-#define SENSOR_PIN A0
+#define SENSOR_PIN A1
 #define WORD_LENGTH 10
 #define SYNC_SYMBOL 0xD5
 #define ETX 0x03
@@ -85,13 +85,15 @@ inline char write_fifo(struct myFifo * pf, int  token){
 int sensorValue = 0;  // variable to store the value coming from the sensor
 
 
-char cmd_symbols []= {0xD5, 0x02, 0x03};
+char cmd_symbols []= {SYNC_SYMBOL, STX, ETX};
 int cmd_symbols_length = sizeof(cmd_symbols);
-
-
 struct myFifo samples_fifo ;
 
 
+// global variables for frame decoding
+char frame_buffer[38] ;
+int frame_index  = -1 ;
+int frame_size = -1 ;
 
 //state variables of the thresholder
 unsigned int signal_mean = 0 ;
@@ -261,6 +263,24 @@ int isCommandSymbol(char symbol){
 }
 
 
+int add_byte_to_frame(char * frame_buffer, int * frame_index, int * frame_size, char data){
+  if(data == SYNC_SYMBOL && (*frame_index) < 0){
+    (*frame_index) = 0 ;
+    (*frame_size) = 0 ;
+  }
+  frame_buffer[*frame_index] = data ;
+  (*frame_index) ++ ;
+  if(data == ETX){
+    (*frame_size) = (*frame_index) ;
+    (*frame_index) = -1 ;
+     return 1 ;
+  }else if((*frame_index) >= 38){ //frame is larger than max size of frame ...
+    (*frame_index) = -1 ;
+    (*frame_size) = -1 ;
+    return -1 ;
+  }
+  else return 0 ;
+}
 
 
 // the loop routine runs over and over again forever:
@@ -269,37 +289,60 @@ void loop() {
   int i; 
   char received_data ;
   sym = detect_symbol(&shift_reg);
+  //at least one symbol was detected
   if(sym >= 0){
+    //receiver is not synced yet, look for a sync symbol
      if(synced < 0 ){
        synced = detect_sync(shift_reg);
-	if(synced >= 0) received_bit = 20 ;
+	     if(synced >= 0){//we received a sync symbols
+	        received_bit = 20 ; // need to received 20 Manchester symbols before decoding a byte
+          add_byte_to_frame(frame_buffer, &frame_index, &frame_size, SYNC_SYMBOL);
+	     }
      }else{
-       if(received_bit > 0 )received_bit =  received_bit - sym ;
+       if(received_bit > 0 )received_bit =  received_bit - sym ; // decrementing number of bits to receive before processing symbols
        if(received_bit <= 0){
+         // we received enough symbols to process at least one byte
          if(received_bit < 0){
-           if(get_data(shift_reg>>(synced+1), &received_data) < 0){
-            synced = -1 ;  
+           if(get_data(shift_reg>>(synced+1), &received_data) < 0){ // verify start stop framing
+            synced = -1 ;  // we lost sync
            }else{
-              if(received_data == ETX){
-                synced = -1 ;
-              }else{
-                if(received_data != 0x02){  
-                  Serial.print(received_data);
+              if(add_byte_to_frame(frame_buffer, &frame_index, &frame_size, received_data) >= 0){
+                if(received_data == ETX){
+                  frame_buffer[frame_size - 1] = '\0' ;
+                  Serial.println(frame_size, DEC);
+                  Serial.print(&frame_buffer[2]);
+                  //frame has ended, now wait for the next sync
+                  synced = -1 ;
+                }else{
+                  //a byte was processed, now wait for 20 new Manchester symbols before processing a byte
+                  received_bit = 20 ;
                 }
-                received_bit = 20 ;
+              }else{
+                //Frame error
+                Serial.println("Frame error");
+                synced = -1 ;
               }
+              
            }
-         }else{
+         }else{ // we received exactly enough symbols to process a byte
            if(get_data(shift_reg>>synced, &received_data) < 0){
             synced = -1 ;  
            }else{
-              if(received_data == ETX){
-                synced = -1 ;
-              }else{
-                if(received_data != 0x02){  
-                  Serial.print(received_data);
+              if(add_byte_to_frame(frame_buffer, &frame_index, &frame_size, received_data) >= 0){
+                if(received_data == ETX){
+                  frame_buffer[frame_size - 1] = '\0' ;
+                  Serial.println(frame_size, DEC);
+                  Serial.print(&frame_buffer[2]);
+                  //frame has ended, now wait for the next sync
+                  synced = -1 ;
+                }else{
+                  //a byte was processed, now wait for 20 new Manchester symbols before processing a byte
+                  received_bit = 20 ;
                 }
-                received_bit = 20 ;
+              }else{
+                //Frame error
+                Serial.println("Frame error");
+                synced = -1 ;
               }
            }
          }
