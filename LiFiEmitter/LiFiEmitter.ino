@@ -34,6 +34,8 @@ N times Effective data excluding command symbols, with N < 32
 #include <TimerOne.h>
 #include <util/atomic.h>
 //Start of what should be an include ...
+
+#define SYMBOL_PERIOD 500
 #define WORD_LENGTH 10
 #define SYNC_SYMBOL 0xD5
 #define ETX 0x03
@@ -144,7 +146,7 @@ void setup() {
   OUT_LED();
   init_frame(frame_buffer);
   init_emitter();
-  Timer1.initialize(800); //1200 bauds
+  Timer1.initialize(SYMBOL_PERIOD); //1200 bauds
   Timer1.attachInterrupt(emit_half_bit); 
 }
 

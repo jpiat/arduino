@@ -41,6 +41,8 @@ enum receiver_state frame_state = IDLE ;
 
 //This defines receiver properties
 #define SENSOR_PIN 3
+#define SYMBOL_PERIOD 500
+#define SAMPLE_PER_SYMBOL 4
 #define WORD_LENGTH 10 // a byte is encoded as a 10-bit value with start and stop bits
 #define SYNC_SYMBOL 0xD5 // this symbol breaks the premanble of the frame
 #define ETX 0x03 // End of frame symbol
@@ -100,7 +102,7 @@ inline int is_a_word(long  * manchester_word, int time_from_last_sync, unsigned 
 inline int insert_edge( long  * manchester_word, char edge, int edge_period, int * time_from_last_sync, unsigned int * detected_word){
    int new_word = 0 ;
    if( ((*manchester_word) & 0x01) != edge ){ //mak sure we don't have same edge ...
-             if(edge_period > 5){
+             if(edge_period > (SAMPLE_PER_SYMBOL+1)){
                 unsigned char last_bit = (*manchester_word) & 0x01 ;
                 (*manchester_word) = ((*manchester_word) << 1) | last_bit ; // signal was steady for longer than a single symbol, 
                 (*time_from_last_sync) += 1 ;
@@ -202,7 +204,7 @@ void setup() {
   ADC_setup();
   ADC_start_conversion(SENSOR_PIN);
   //analogReference(INTERNAL); // internal reference is 1.1v, should give better accuracy for the mv range of the led output.
-  Timer1.initialize(800/4); //1200 bauds oversampled by factor 4
+  Timer1.initialize(SYMBOL_PERIOD/SAMPLE_PER_SYMBOL); //1200 bauds oversampled by factor 4
   Timer1.attachInterrupt(sample_signal_edge);
 
 }
