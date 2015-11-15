@@ -31,6 +31,8 @@ N times Effective data excluding command symbols, with N < 32
 0x03 : ETX end of frame
 */
 
+#include <TimerOne.h>
+#include <util/atomic.h>
 //Start of what should be an include ...
 #define WORD_LENGTH 10
 #define SYNC_SYMBOL 0xD5
@@ -45,119 +47,67 @@ N times Effective data excluding command symbols, with N < 32
 */
 
 //These defines are for a RGB led connected to D2, D3, D4
-#define OUT_LED() DDRD |= ((1 << 2) | (1 << 3) | (1 << 4))
+/*#define OUT_LED() DDRD |= ((1 << 2) | (1 << 3) | (1 << 4))
 #define SET_LED() PORTD |= ((1 << 2) | (1 << 3) | (1 << 4))
 #define CLR_LED() PORTD &= ~((1 << 2) | (1 << 3) | (1 << 4))
+*/
+#define OUT_LED() DDRD |= ((1 << 2))
+#define SET_LED() PORTD |= ((1 << 2))
+#define CLR_LED() PORTD &= ~((1 << 2))
 
 
-char frame_buffer [38] ; //buffer for frame
-int frame_index = -1; // index in frame
-int frame_size = -1  ; // size of the frame to be sent
+unsigned char frame_buffer [38] ; //buffer for frame
+char frame_index = -1; // index in frame
+char frame_size = -1  ; // size of the frame to be sent
 
 //state variables of the manchester encoder
 unsigned char bit_counter = 0 ;
 unsigned short data_word = 0 ;  //8bit data + start + stop
 unsigned char half_bit = 0 ;
+unsigned long int manchester_data ;
+
+void to_manchester(unsigned char data, unsigned long int * data_manchester){
+  unsigned int i ;
+ (*data_manchester) = 0x02 ; // STOP symbol
+ (*data_manchester) = (*data_manchester) << 2 ;
+  for(i = 0 ; i < 8; i ++){
+    if(data & 0x80) (*data_manchester) |=  0x02  ; // data LSB first
+    else (*data_manchester) |= 0x01 ;
+    (*data_manchester) = (*data_manchester) << 2 ;
+    data = data << 1 ; // to next bit
+  }
+  (*data_manchester) |= 0x01 ; //START symbol
+}
 
 //emitter interrupt
-ISR(TIMER2_COMPA_vect){
-  if(bit_counter > 0){ // if there is bits to send
-    unsigned char data_bit = (data_word >> (WORD_LENGTH - bit_counter) ) & 0x01 ; //LSB first  
-    #ifdef INVERT_BIT
-      data_bit = (~data_bit) & 0x01 ;
-    #endif
-    if(!half_bit){ // first half of the bit (manchester encoding)
-      if(data_bit){
-          CLR_LED();
-      }else{
-          SET_LED();
-      }
-      half_bit = 1 ;
-    }else{ // second half of the bit (manchester encoding)
-      if(data_bit){
-          SET_LED();
-      }else{
-          CLR_LED();
-      }
-      half_bit = 0 ;
-      bit_counter -- ;
-      if(bit_counter == 0){
-        frame_index ++ ;   
+void emit_half_bit(){
+     if(manchester_data & 0x01){
+       SET_LED();
+     }else{
+       CLR_LED();
+     }
+     bit_counter -- ;
+     manchester_data = (manchester_data >> 1);
+     if(bit_counter == 0){   
         //is there still bytes to send in the frame ?
-        if(frame_index < frame_size){
-          data_word = (frame_buffer[frame_index] << 1) | 0 | (1 << (WORD_LENGTH-1));
-          bit_counter = WORD_LENGTH ;
-        }else{
-          //not more bytes setting indexes to -1
-          frame_index = -1 ;
-          frame_size = -1 ;
+        manchester_data = 0xAAAAAAAA ; // keep sending ones if nothing to send
+        if(frame_index >= 0 ){
+          if(frame_index < frame_size){
+            /*Serial.println(frame_index, DEC);
+            Serial.println(frame_buffer[frame_index], HEX);*/
+            to_manchester(frame_buffer[frame_index], &manchester_data);
+            frame_index ++ ;
+          }else{
+            frame_index = -1 ;
+            frame_size = -1 ;
+          }
         }
+        bit_counter = WORD_LENGTH * 2 ;
+        //Serial.println(manchester_data, BIN);
       }
-    }
-  }else{ // keep sending ones if there is nothing to send
-      if(!half_bit){ // first half of the bit (manchester encoding)
-      CLR_LED();
-      half_bit = 1 ;
-    }else{// second half of the bit (manchester encoding)
-      SET_LED();
-      half_bit = 0 ;
-      //Transmitter was IDLE and a new frame is ready to send
-      if(frame_index < frame_size){      
-          data_word = (frame_buffer[frame_index] << 1) | 0 | (1 << (WORD_LENGTH-1));
-          bit_counter = WORD_LENGTH ;
-      }
-    } 
-  }
 }
 
-void setupTimer2(unsigned char prescaler, unsigned int period){
-  TCCR2A = 0;// set entire TCCR2A register to 0
-  TCCR2B = 0;// same for TCCR2B
-  TCNT2  = 0;//initialize counter value to 0
-  // set compare match register for 8khz increments
-  OCR2A = period;// = (16*10^6) / (8000*8) - 1 (must be <256)
-  // turn on CTC mode
-  TCCR2A |= (1 << WGM21);
-  
-  switch(prescaler){
-    case 0 :
-      // Set CS20 bit for no prescaler
-      TCCR2B |= (1 << CS20);
-    case 1 :
-      // Set CS21 bit for 8 prescaler
-      TCCR2B |= (1 << CS21);
-    case 2 :
-      // Set CS21 bit for 64 prescaler
-      TCCR2B |= (1 << CS21) | (1 << CS20);
-      break ;   
-    case 3 :
-      // Set CS21 bit for 128 prescaler
-      TCCR2B |= (1 << CS22) ;
-      break ; 
-    case 4 :
-      // Set CS21 bit for 128 prescaler
-      TCCR2B |= (1 << CS22) | (1 << CS20);
-      break ; 
-     case 5 :
-      // Set CS21 bit for 256 prescaler
-      TCCR2B |= (1 << CS22) | (1 << CS21) ;
-      break ;
-    case 6 :
-      // Set CS21 bit for 1024 prescaler
-      TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);
-      break ;    
-    default :
-      TCCR2B |= (1 << CS20);
-      break ;
-      
-  }
-  // enable timer compare interrupt
-  TIMSK2 |= (1 << OCIE2A); 
-  
-}
-
-
-void init_frame(char * frame){
+void init_frame(unsigned char * frame){
   memset(frame, 0xAA, 3);
   frame[3] = SYNC_SYMBOL ;
   frame[4] = STX;
@@ -165,19 +115,27 @@ void init_frame(char * frame){
   frame_size = -1 ;
 }
 
-int create_frame(char * data, int data_size, char * frame){
+int create_frame(char * data, int data_size, unsigned char * frame){
   memcpy(&(frame[5]), data, data_size);
   frame[5+data_size] = ETX;
   return 1 ;
 }
 
 int write(char * data, int data_size){
-  if(frame_index > 0) return -1 ;
+  if(frame_index >=  0) return -1 ;
+  if(data_size > 32) return -1 ;
   create_frame(data, data_size,frame_buffer);
-  frame_index = 0 ;
-  frame_size = data_size + 6 ;
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE){
+    frame_index = 0 ;
+    frame_size = data_size + 6 ;
+  }
+  return 0 ;
 }
 
+void init_emitter(){
+  manchester_data = 0xFFFFFFFF ;
+  bit_counter = WORD_LENGTH * 2 ;
+}
 
 // the setup routine runs once when you press reset:
 void setup() {
@@ -185,16 +143,23 @@ void setup() {
   Serial.begin(115200);
   OUT_LED();
   init_frame(frame_buffer);
-  cli();//stop interrupts
-  setupTimer2(5, 48); // transmitter rate = 16_000_000/256/52 
-  //setupTimer2(5, 255);
-  sei();//allow interrupts
-
+  init_emitter();
+  Timer1.initialize(800); //1200 bauds
+  Timer1.attachInterrupt(emit_half_bit); 
 }
 
 
 // the loop routine runs over and over again forever:
+char * msg = "Hello World" ;
 void loop() {
-  write("Hello World", 11);
-  delay(2);
+  static int i = 0 ;
+  char com_buffer [32] ;
+  memcpy(com_buffer, msg, 11);
+  com_buffer[11] = i + '0' ;
+  if(write(com_buffer, 12) < 0){
+    delay(10);
+  }else{
+    i ++ ; 
+    if(i > 9) i = 0 ;
+  }
 }

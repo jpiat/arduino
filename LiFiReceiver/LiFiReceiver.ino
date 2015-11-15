@@ -1,3 +1,5 @@
+#include <TimerOne.h>
+
 /*
 LiFi Emitter and Receiver
 
@@ -29,65 +31,20 @@ N times Effective data excluding command symbols, max length 32 bytes
 0x03 : ETX end of frame
 */
 
-//Start of what should be an include ...
-
-#define ACC_LENGTH 16
-
-struct myFifo{
-  int data [ACC_LENGTH];
-  unsigned int fifo_size ;
-  unsigned int write_index ;
-  unsigned int read_index ;
-  unsigned int nb_available ; 
+enum receiver_state {
+  IDLE,
+  SYNC,
+  START,
+  DATA
 };
+enum receiver_state frame_state = IDLE ;
 
-void init_fifo(struct myFifo * pf){
-   pf -> fifo_size = ACC_LENGTH ;
-   pf -> write_index = 0 ;
-   pf -> read_index = 0 ;
-   pf -> nb_available = 0 ;
- }
-
-
-inline char read_fifo(struct myFifo * pf, int * token){
-  if(pf->nb_available == 0) return -1 ;
-  *token = pf->data[pf->read_index]  ;
-  pf->read_index = pf->read_index + 1;
-  if(pf->read_index >= pf->fifo_size) pf->read_index = 0 ;
-  pf->nb_available = pf->nb_available -1 ;
-  return 0 ;
-  
-}
-
-inline char peek_fifo(struct myFifo * pf, int * token){
-  if(pf->nb_available == 0) return -1 ;
-  *token = pf->data[pf->read_index]  ;
-  return 0 ;
-  
-}
-
-inline char write_fifo(struct myFifo * pf, int  token){
-  if(pf->nb_available >= pf->fifo_size) return -1 ;
-  pf->data[pf->write_index] = token ;
-  pf->write_index = pf->write_index + 1;
-  if(pf->write_index >= pf->fifo_size) pf->write_index = 0 ;
-  pf->nb_available = pf->nb_available + 1 ;
-  return 0 ;
-}
-//end of fifo include
-
-#define SENSOR_PIN A1
-#define WORD_LENGTH 10
-#define SYNC_SYMBOL 0xD5
-#define ETX 0x03
-#define STX 0x02
-
-int sensorValue = 0;  // variable to store the value coming from the sensor
-
-
-char cmd_symbols []= {SYNC_SYMBOL, STX, ETX};
-int cmd_symbols_length = sizeof(cmd_symbols);
-struct myFifo samples_fifo ;
+//This defines receiver properties
+#define SENSOR_PIN 3
+#define WORD_LENGTH 10 // a byte is encoded as a 10-bit value with start and stop bits
+#define SYNC_SYMBOL 0xD5 // this symbol breaks the premanble of the frame
+#define ETX 0x03 // End of frame symbol
+#define STX 0x02 //Start or frame symbol 
 
 
 // global variables for frame decoding
@@ -97,258 +54,186 @@ int frame_size = -1 ;
 
 //state variables of the thresholder
 unsigned int signal_mean = 0 ;
-unsigned long acc_sum = 0 ;
+unsigned long acc_sum = 0 ; //used to compute the signal mean value
 unsigned int acc_counter = 0 ;
 
 //manechester decoder state variable
 long shift_reg = 0;
 
-//frame receiver state variables
-int synced = -1 ;
-int received_bit = 0 ;
+
+//Start of ADC managements functions
+void ADC_setup(){
+  ADCSRA =  bit (ADEN);                      // turn ADC on
+  ADCSRA |= bit (ADPS0) |  bit (ADPS1) | bit (ADPS2);  // Prescaler of 128
+  ADMUX  =  bit (REFS0) | bit (REFS1);    // internal and select input port
+}
+
+void ADC_start_conversion(int adc_pin){
+  ADMUX &= ~(0x07) ; //clearing enabled channels
+  ADMUX  |= (adc_pin & 0x07) ;    // AVcc and select input port
+  bitSet (ADCSRA, ADSC) ;
+}
+
+int ADC_read_conversion(){
+ while(bit_is_set(ADCSRA, ADSC));
+ return ADC ;
+}
+//End of ADC management functions
+
+#define START_SYMBOL 0x02
+#define STOP_SYMBOL 0x01
+#define START_STOP_MASK  ((STOP_SYMBOL << 20) | (START_SYMBOL << 18) | STOP_SYMBOL) //STOP/START/16bits/STOP
+inline int is_a_word(long  * manchester_word, int time_from_last_sync, unsigned int * detected_word){
+        if(time_from_last_sync >= 20  || frame_state == IDLE){ // we received enough bits to test the sync      
+            if(((*manchester_word) & START_STOP_MASK) == (START_STOP_MASK)){ // testing first position 
+                  (*detected_word) = ((*manchester_word) >> 2) & 0xFFFF;
+                  return 1 ;
+                  // byte with correct framing
+            }else if(frame_state != IDLE && time_from_last_sync == 20){
+               (*detected_word)= ((*manchester_word) >> 2) & 0xFFFF;
+               return 1 ;
+            }
+          }
+          return 0 ;
+}
+
+inline int insert_edge( long  * manchester_word, char edge, int edge_period, int * time_from_last_sync, unsigned int * detected_word){
+   int new_word = 0 ;
+   if( ((*manchester_word) & 0x01) != edge ){ //mak sure we don't have same edge ...
+             if(edge_period > 5){
+                unsigned char last_bit = (*manchester_word) & 0x01 ;
+                (*manchester_word) = ((*manchester_word) << 1) | last_bit ; // signal was steady for longer than a single symbol, 
+                (*time_from_last_sync) += 1 ;
+                if(is_a_word(manchester_word, (*time_from_last_sync), detected_word)){
+                   new_word = 1 ;
+                  (*time_from_last_sync) =  0 ;
+                }
+             }
+             //storing edge value in word
+             if(edge < 0){
+              (*manchester_word) = ( (*manchester_word) << 1) | 0x00 ; // signal goes down
+             }else{
+              (*manchester_word) = ( (*manchester_word) << 1) | 0x01 ; // signal goes up
+             }
+             (*time_from_last_sync) += 1 ;
+             if(is_a_word(manchester_word, (*time_from_last_sync), detected_word)){
+               new_word = 1 ;
+               (*time_from_last_sync) =  0 ;
+             }
+          }
+          return new_word ;
+}
 
 
-
+#define SYNC_SYMBOL_MANCHESTER  (0x6665)
+#define EDGE_THRESHOLD 8
+int sensorValue = 0;
+int oldValue = 0 ;
+char old_edge_val = 0 ;
+int steady_count = 0 ;
+int symbol_count = 0 ;
+int dist_last_sync = 0 ;
+unsigned int detected_word = 0;
+int new_word ;
 //receiver interrupt
-ISR(TIMER1_COMPA_vect){
-  int sensorValue = analogRead(SENSOR_PIN);
-  int i = 0;
-  acc_sum = acc_sum +  sensorValue; 
-  acc_counter = acc_counter + 1 ;
-  if(acc_counter >= 32){
-    signal_mean = acc_sum / 32 ;
-    acc_counter = 0 ;
-    acc_sum = 0 ;
-  }
-  if(signal_mean > 0){
- 	 write_fifo(&samples_fifo, sensorValue);//wait for the thresholding to be stable
-  }
-  /*if(pin_state == 0){ // for debug purpose, only to make sur the sampling rate is the one expected
-      digitalWrite(12, LOW);
-      pin_state = 1 ;
-  }else{
-      digitalWrite(12, HIGH);
-      pin_state = 0 ;
-  }*/
-}
-
-void setupTimer1(unsigned char prescaler, unsigned int period){
-  TCCR1A = 0;// set entire TCCR1A register to 0
-  TCCR1B = 0;// same for TCCR1B
-  TCNT1  = 0;//initialize counter value to 0
-  // set compare match register for 1hz increments
-  OCR1A = period;// = (16*10^6) / (1*1024) - 1 (must be <65536)
-  // turn on CTC mode
-  TCCR1B |= (1 << WGM12);
-  switch(prescaler){
-    case 0 :
-      // Set CS20 bit for no prescaler
-      TCCR1B |= (1 << CS10);
-    case 1 :
-      // Set CS21 bit for 8 prescaler
-      TCCR1B |= (1 << CS11);
-    case 2 :
-      // Set CS21 bit for 64 prescaler
-      TCCR1B |= (1 << CS11) | (1 << CS10);
-      break ;   
-    case 3 :
-      // Set CS21 bit for 256 prescaler
-      TCCR1B |= (1 << CS12) ;
-      break ; 
-    case 4 :
-      // Set CS21 bit for 1024 prescaler
-      TCCR1B |= (1 << CS12) | (1 << CS10);
-      break ; 
-    default :
-      TCCR1B |= (1 << CS10);
-      break ;
-      
-  } 
-  // enable timer compare interrupt
-  TIMSK1 |= (1 << OCIE1A);
-}
-
-
-int detect_symbol(long * data_reg){
-  unsigned char bit_val, prev_bit_val = 2 ;
-  unsigned int same_counter = 0 ;
-  int sample_val ;
-  if(samples_fifo.nb_available < 10) return -1 ; // maximum symbol length is 10 (one symbol is ~4 samples, can have one sequence of two consecutive symbols so ~8 samples)
-  while(same_counter < 10 ){
-    peek_fifo(&samples_fifo, &sample_val);
-    bit_val = sample_val > signal_mean ? 1 : 0 ;
-    //Serial.print(bit_val , BIN);
-    if(bit_val == prev_bit_val){
-      read_fifo(&samples_fifo, &sample_val);
-      same_counter ++ ;
-    }else{
-      if(same_counter >= 2 ){ // at least 2 bit with same val for a reliable data
-        *data_reg = (*data_reg << 1) | prev_bit_val ;
-         if(same_counter >= 5){ // at least 6 bit with same val for a reliable data
-            *data_reg = (*data_reg << 1) | prev_bit_val ;
-            return 2 ; // two symbol found
-         }
-         return 1 ; // one symbol found
-      }
-      read_fifo(&samples_fifo, &sample_val);
-      same_counter ++ ;
+void sample_signal_edge(){
+  char edge_val ;
+  //int sensorValue = analogRead(SENSOR_PIN); // this is too slow and should be replaced with interrupt-driven ADC
+  int sensorValue  = ADC_read_conversion(); // read result of previously triggered conversion
+  ADC_start_conversion(SENSOR_PIN); // start a conversion for next loop
+  //Serial.println(sensorValue, DEC);
+  if((sensorValue - oldValue) > EDGE_THRESHOLD) edge_val = 1 ;
+  else if((oldValue - sensorValue) > EDGE_THRESHOLD) edge_val = -1;
+  else edge_val = 0 ;
+  oldValue = sensorValue ;
+  if(edge_val == 0){
+    if( steady_count < 16){
+      steady_count ++ ;
     }
-    prev_bit_val = bit_val ;
+  }else{  
+          new_word = insert_edge(&shift_reg, edge_val, steady_count, &(dist_last_sync), &detected_word); 
+          if(dist_last_sync > 32){ // limit dist_last_sync to avoid overflow problems
+            dist_last_sync = 32 ;
+          }
+          steady_count = 0 ; // Should it be 0 ?
+        }
+}
+
+int add_byte_to_frame(char * frame_buffer, int * frame_index, int * frame_size, enum receiver_state * frame_state ,unsigned char data){
+  if(data == SYNC_SYMBOL/* && (*frame_index) < 0*/){
+    (*frame_index) = 0 ;
+    (*frame_size) = 0 ;
+    (*frame_state) = SYNC ;
+    //Serial.println("SYNC");
+    return 0 ;
+  }
+  if((*frame_state) != IDLE){ // we are synced
+  frame_buffer[*frame_index] = data ;
+  (*frame_index) ++ ;
+    if(data == STX){
+      //Serial.println("START");
+      (*frame_state) = START ;
+       return 0 ;
+    }else if(data == ETX){
+      //Serial.println("END");
+      (*frame_size) = (*frame_index) ;
+      (*frame_index) = -1 ;
+      (*frame_state) = IDLE ;
+      //Serial.println("END");
+       return 1 ;
+    }else if((*frame_index) >= 38){ //frame is larger than max size of frame ...
+      (*frame_index) = -1 ;
+      (*frame_size) = -1 ;
+      (*frame_state) = IDLE ;
+      return -1 ;
+    }else{
+      (*frame_state) = DATA ;
+    }
+    return 0 ;
   }
   return -1 ;
 }
-
-
-char get_data(long data_reg, char *data){
-  char received_data = 0;
-  if((data_reg & 0x03) == 0x01){
-       if(((data_reg >> 18) & 0x03) == 0x02){
-           int i  ;
-           received_data = 0 ;
-           for(i = 2 ; i < 18 ; i = i + 2){
-             received_data = received_data << 1 ;
-             if(((data_reg >> i) & 0x03) == 0x01){
-                 received_data |= 0x01 ;
-             }else{
-                 received_data &= ~0x01 ;
-             } 
-           }
-           *data = received_data ;
-          return 1 ;
-       }else{
-           return -1 ;
-       }
-     }else{
-           return -1 ;
-     }
-     return -1 ;
-}
-
 
 // the setup routine runs once when you press reset:
 void setup() {
   // initialize serial communication at 115200 bits per second:
   int i; 
-  
-  init_fifo(&samples_fifo);
   Serial.begin(115200);
-  analogReference(INTERNAL); // internal reference is 1.1v, should give better accuracy for the mv range of the led output.
-  cli();//stop interrupts
-  setupTimer1(3, 12); // 4 time the transmitter clock
-  sei();//allow interrupts
+  ADC_setup();
+  ADC_start_conversion(SENSOR_PIN);
+  //analogReference(INTERNAL); // internal reference is 1.1v, should give better accuracy for the mv range of the led output.
+  Timer1.initialize(800/4); //1200 bauds oversampled by factor 4
+  Timer1.attachInterrupt(sample_signal_edge);
 
-}
-
-
-int detect_sync(long reg){
-	int i  ;
-        char data ;
-	for(i = 0; i < 8 ; i ++){
-	 if(get_data(reg>>i, &data)  >= 0){
-	   if((data & 0xFF) == SYNC_SYMBOL){
-	     Serial.println("\nsynced!");
-	     return i ;
-	   }
-	 }
-	}
-	return -1 ;
-}
-
-int isCommandSymbol(char symbol){
-    int i;
-    for(i = 0; i < cmd_symbols_length; i ++){
-       if(symbol == cmd_symbols[i]) return i ; 
-    }
-    return -1 ;  
-}
-
-
-int add_byte_to_frame(char * frame_buffer, int * frame_index, int * frame_size, char data){
-  if(data == SYNC_SYMBOL && (*frame_index) < 0){
-    (*frame_index) = 0 ;
-    (*frame_size) = 0 ;
-  }
-  frame_buffer[*frame_index] = data ;
-  (*frame_index) ++ ;
-  if(data == ETX){
-    (*frame_size) = (*frame_index) ;
-    (*frame_index) = -1 ;
-     return 1 ;
-  }else if((*frame_index) >= 38){ //frame is larger than max size of frame ...
-    (*frame_index) = -1 ;
-    (*frame_size) = -1 ;
-    return -1 ;
-  }
-  else return 0 ;
 }
 
 
 // the loop routine runs over and over again forever:
 void loop() {
-  int sym ;
+  int sym_nb_bits ;
   int i; 
-  char received_data ;
-  sym = detect_symbol(&shift_reg);
-  //at least one symbol was detected
-  if(sym >= 0){
-    //receiver is not synced yet, look for a sync symbol
-     if(synced < 0 ){
-       synced = detect_sync(shift_reg);
-	     if(synced >= 0){//we received a sync symbols
-	        received_bit = 20 ; // need to received 20 Manchester symbols before decoding a byte
-          add_byte_to_frame(frame_buffer, &frame_index, &frame_size, SYNC_SYMBOL);
-	     }
-     }else{
-       if(received_bit > 0 )received_bit =  received_bit - sym ; // decrementing number of bits to receive before processing symbols
-       if(received_bit <= 0){
-         // we received enough symbols to process at least one byte
-         if(received_bit < 0){
-           if(get_data(shift_reg>>(synced+1), &received_data) < 0){ // verify start stop framing
-            synced = -1 ;  // we lost sync
-           }else{
-              if(add_byte_to_frame(frame_buffer, &frame_index, &frame_size, received_data) >= 0){
-                if(received_data == ETX){
-                  frame_buffer[frame_size - 1] = '\0' ;
-                  Serial.println(frame_size, DEC);
-                  Serial.print(&frame_buffer[2]);
-                  //frame has ended, now wait for the next sync
-                  synced = -1 ;
-                }else{
-                  //a byte was processed, now wait for 20 new Manchester symbols before processing a byte
-                  received_bit = 20 ;
-                }
-              }else{
-                //Frame error
-                Serial.println("Frame error");
-                synced = -1 ;
-              }
-              
-           }
-         }else{ // we received exactly enough symbols to process a byte
-           if(get_data(shift_reg>>synced, &received_data) < 0){
-            synced = -1 ;  
-           }else{
-              if(add_byte_to_frame(frame_buffer, &frame_index, &frame_size, received_data) >= 0){
-                if(received_data == ETX){
-                  frame_buffer[frame_size - 1] = '\0' ;
-                  Serial.println(frame_size, DEC);
-                  Serial.print(&frame_buffer[2]);
-                  //frame has ended, now wait for the next sync
-                  synced = -1 ;
-                }else{
-                  //a byte was processed, now wait for 20 new Manchester symbols before processing a byte
-                  received_bit = 20 ;
-                }
-              }else{
-                //Frame error
-                Serial.println("Frame error");
-                synced = -1 ;
-              }
-           }
-         }
-         
-       }
-     }
+  unsigned char received_data;
+  char received_data_print ;
+  
+  int nb_shift ;
+  int byte_added = 0 ;
+  if(new_word == 1){
+    received_data = 0 ;
+    for(i = 0 ; i < 16 ; i = i + 2){ //decoding Manchester
+             received_data = received_data << 1 ;
+             if(((detected_word >> i) & 0x03) == 0x01){
+                 received_data |= 0x01 ;
+             }else{
+                 received_data &= ~0x01 ;
+             }
+    }
+    received_data = received_data & 0xFF ;
+    //Serial.println((received_data & 0xFF), HEX);
+    new_word = 0 ;
+    if((byte_added = add_byte_to_frame(frame_buffer, &frame_index, &frame_size, &frame_state,received_data)) > 0){
+      frame_buffer[frame_size] = '\0';
+      Serial.println(&(frame_buffer[1]));
+    }
+    
   }
-
 }
