@@ -32,10 +32,10 @@ N times Effective data excluding command symbols, max length 32 bytes
 */
 
 enum receiver_state {
-  IDLE,
-  SYNC,
-  START,
-  DATA
+  IDLE, //waiting for sync
+  SYNC, //synced, waiting for STX
+  START, //STX received
+  DATA //receiving DATA
 };
 enum receiver_state frame_state = IDLE ;
 
@@ -67,7 +67,8 @@ long shift_reg = 0;
 void ADC_setup(){
   ADCSRA =  bit (ADEN);                      // turn ADC on
   ADCSRA |= bit (ADPS0) |  bit (ADPS1) | bit (ADPS2);  // Prescaler of 128
-  ADMUX  =  bit (REFS0) | bit (REFS1);    // internal and select input port
+  ADMUX  =  bit (REFS0) | bit (REFS1);    // internal 1.1v reference
+  //ADMUX  =  bit (REFS0) ;   // external 5v reference
 }
 
 void ADC_start_conversion(int adc_pin){
@@ -122,6 +123,8 @@ inline int insert_edge( long  * manchester_word, char edge, int edge_period, int
                new_word = 1 ;
                (*time_from_last_sync) =  0 ;
              }
+          }else{
+            new_word = -1 ;
           }
           return new_word ;
 }
@@ -129,15 +132,12 @@ inline int insert_edge( long  * manchester_word, char edge, int edge_period, int
 
 #define SYNC_SYMBOL_MANCHESTER  (0x6665)
 #define EDGE_THRESHOLD 8
-int sensorValue = 0;
 int oldValue = 0 ;
-char old_edge_val = 0 ;
 int steady_count = 0 ;
-int symbol_count = 0 ;
 int dist_last_sync = 0 ;
 unsigned int detected_word = 0;
-int new_word ;
-//receiver interrupt
+int new_word = 0;
+char old_edge_val = 0 ;
 void sample_signal_edge(){
   char edge_val ;
   //int sensorValue = analogRead(SENSOR_PIN); // this is too slow and should be replaced with interrupt-driven ADC
@@ -148,17 +148,20 @@ void sample_signal_edge(){
   else if((oldValue - sensorValue) > EDGE_THRESHOLD) edge_val = -1;
   else edge_val = 0 ;
   oldValue = sensorValue ;
-  if(edge_val == 0){
-    if( steady_count < 16){
+  if(edge_val == 0 || edge_val == old_edge_val || (edge_val != old_edge_val && steady_count < 2)){
+    if( steady_count < (4 * SAMPLE_PER_SYMBOL)){
       steady_count ++ ;
     }
   }else{  
           new_word = insert_edge(&shift_reg, edge_val, steady_count, &(dist_last_sync), &detected_word); 
-          if(dist_last_sync > 32){ // limit dist_last_sync to avoid overflow problems
+          if(dist_last_sync > (8*SAMPLE_PER_SYMBOL)){ // limit dist_last_sync to avoid overflow problems
             dist_last_sync = 32 ;
           }
-          steady_count = 0 ; // Should it be 0 ?
+          //if(new_word >= 0){
+            steady_count = 0 ;
+          //}
         }
+        old_edge_val = edge_val ;
 }
 
 int add_byte_to_frame(char * frame_buffer, int * frame_index, int * frame_size, enum receiver_state * frame_state ,unsigned char data){
@@ -201,6 +204,7 @@ void setup() {
   // initialize serial communication at 115200 bits per second:
   int i; 
   Serial.begin(115200);
+  pinMode(13, OUTPUT);
   ADC_setup();
   ADC_start_conversion(SENSOR_PIN);
   //analogReference(INTERNAL); // internal reference is 1.1v, should give better accuracy for the mv range of the led output.
@@ -212,11 +216,9 @@ void setup() {
 
 // the loop routine runs over and over again forever:
 void loop() {
-  int sym_nb_bits ;
   int i; 
   unsigned char received_data;
   char received_data_print ;
-  
   int nb_shift ;
   int byte_added = 0 ;
   if(new_word == 1){
@@ -230,12 +232,11 @@ void loop() {
              }
     }
     received_data = received_data & 0xFF ;
-    //Serial.println((received_data & 0xFF), HEX);
     new_word = 0 ;
     if((byte_added = add_byte_to_frame(frame_buffer, &frame_index, &frame_size, &frame_state,received_data)) > 0){
       frame_buffer[frame_size] = '\0';
       Serial.println(&(frame_buffer[1]));
     }
-    
+    //if(frame_state != IDLE) Serial.println(received_data, HEX);
   }
 }
