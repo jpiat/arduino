@@ -31,6 +31,9 @@ N times Effective data excluding command symbols, max length 32 bytes
 0x03 : ETX end of frame
 */
 
+
+#define DEBUG
+
 enum receiver_state {
   IDLE, //waiting for sync
   SYNC, //synced, waiting for STX
@@ -232,6 +235,11 @@ void loop() {
              }
     }
     received_data = received_data & 0xFF ;
+    #ifdef DEBUG
+      Serial.print(received_data & 0xFF, DEC);
+      Serial.print(", ");
+      Serial.println(received_data);
+    #endif
     new_word = 0 ;
     if((byte_added = add_byte_to_frame(frame_buffer, &frame_index, &frame_size, &frame_state,received_data)) > 0){
       frame_buffer[frame_size] = '\0';
