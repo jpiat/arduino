@@ -32,7 +32,7 @@ N times Effective data excluding command symbols, max length 32 bytes
 */
 
 
-#define DEBUG
+//#define DEBUG
 
 enum receiver_state {
   IDLE, //waiting for sync
@@ -89,10 +89,14 @@ int ADC_read_conversion(){
 #define START_SYMBOL 0x02
 #define STOP_SYMBOL 0x01
 #define START_STOP_MASK  ((STOP_SYMBOL << 20) | (START_SYMBOL << 18) | STOP_SYMBOL) //STOP/START/16bits/STOP
+#define SYNC_SYMBOL_MANCHESTER  (0x6665)
 inline int is_a_word(long  * manchester_word, int time_from_last_sync, unsigned int * detected_word){
         if(time_from_last_sync >= 20  || frame_state == IDLE){ // we received enough bits to test the sync      
             if(((*manchester_word) & START_STOP_MASK) == (START_STOP_MASK)){ // testing first position 
                   (*detected_word) = ((*manchester_word) >> 2) & 0xFFFF;
+                  if(frame_state == IDLE){
+                     if((*detected_word) == SYNC_SYMBOL_MANCHESTER) return 2 ;
+                  }
                   return 1 ;
                   // byte with correct framing
             }else if(frame_state != IDLE && time_from_last_sync == 20){
@@ -105,14 +109,18 @@ inline int is_a_word(long  * manchester_word, int time_from_last_sync, unsigned 
 
 inline int insert_edge( long  * manchester_word, char edge, int edge_period, int * time_from_last_sync, unsigned int * detected_word){
    int new_word = 0 ;
+   int is_a_word_value = 0 ;
+   int sync_word_detect = 0 ;
    if( ((*manchester_word) & 0x01) != edge ){ //mak sure we don't have same edge ...
              if(edge_period > (SAMPLE_PER_SYMBOL+1)){
                 unsigned char last_bit = (*manchester_word) & 0x01 ;
                 (*manchester_word) = ((*manchester_word) << 1) | last_bit ; // signal was steady for longer than a single symbol, 
                 (*time_from_last_sync) += 1 ;
-                if(is_a_word(manchester_word, (*time_from_last_sync), detected_word)){
+                is_a_word_value = is_a_word(manchester_word, (*time_from_last_sync), detected_word);
+                if(is_a_word_value > 0){ //found start stop framing
                    new_word = 1 ;
                   (*time_from_last_sync) =  0 ;
+                  if(is_a_word_value > 1) sync_word_detect = 1 ; //we detected framing and sync word in manchester format
                 }
              }
              //storing edge value in word
@@ -122,7 +130,8 @@ inline int insert_edge( long  * manchester_word, char edge, int edge_period, int
               (*manchester_word) = ( (*manchester_word) << 1) | 0x01 ; // signal goes up
              }
              (*time_from_last_sync) += 1 ;
-             if(is_a_word(manchester_word, (*time_from_last_sync), detected_word)){
+             is_a_word_value = is_a_word(manchester_word, (*time_from_last_sync), detected_word);
+             if(sync_word_detect == 0 && is_a_word_value > 0){ //if sync word was detected at previous position, don't take word detection into account
                new_word = 1 ;
                (*time_from_last_sync) =  0 ;
              }
@@ -133,7 +142,6 @@ inline int insert_edge( long  * manchester_word, char edge, int edge_period, int
 }
 
 
-#define SYNC_SYMBOL_MANCHESTER  (0x6665)
 #define EDGE_THRESHOLD 8
 int oldValue = 0 ;
 int steady_count = 0 ;
@@ -236,9 +244,9 @@ void loop() {
     }
     received_data = received_data & 0xFF ;
     #ifdef DEBUG
-      Serial.print(received_data & 0xFF, DEC);
+      Serial.print(received_data & 0xFF, HEX);
       Serial.print(", ");
-      Serial.println(received_data);
+      Serial.println((char) received_data);
     #endif
     new_word = 0 ;
     if((byte_added = add_byte_to_frame(frame_buffer, &frame_index, &frame_size, &frame_state,received_data)) > 0){
