@@ -142,7 +142,7 @@ inline int insert_edge( long  * manchester_word, char edge, int edge_period, int
 }
 
 
-#define EDGE_THRESHOLD 8
+#define EDGE_THRESHOLD 4
 int oldValue = 0 ;
 int steady_count = 0 ;
 int dist_last_sync = 0 ;
@@ -215,7 +215,7 @@ void setup() {
   // initialize serial communication at 115200 bits per second:
   int i; 
   Serial.begin(115200);
-  pinMode(13, OUTPUT);
+  Serial.println("Start of receiver program");
   ADC_setup();
   ADC_start_conversion(SENSOR_PIN);
   //analogReference(INTERNAL); // internal reference is 1.1v, should give better accuracy for the mv range of the led output.
