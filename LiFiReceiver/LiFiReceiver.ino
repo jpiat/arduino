@@ -33,6 +33,7 @@ N times Effective data excluding command symbols, max length 32 bytes
 
 
 //#define DEBUG
+//#define DEBUG_ANALOG
 
 enum receiver_state {
   IDLE, //waiting for sync
@@ -154,7 +155,11 @@ void sample_signal_edge(){
   //int sensorValue = analogRead(SENSOR_PIN); // this is too slow and should be replaced with interrupt-driven ADC
   int sensorValue  = ADC_read_conversion(); // read result of previously triggered conversion
   ADC_start_conversion(SENSOR_PIN); // start a conversion for next loop
-  //Serial.println(sensorValue, DEC);
+  #ifndef DEBUG
+  #ifdef DEBUG_ANALOG
+  Serial.println(sensorValue, DEC);
+  #endif
+  #endif
   if((sensorValue - oldValue) > EDGE_THRESHOLD) edge_val = 1 ;
   else if((oldValue - sensorValue) > EDGE_THRESHOLD) edge_val = -1;
   else edge_val = 0 ;
