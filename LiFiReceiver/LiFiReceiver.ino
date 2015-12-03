@@ -35,6 +35,8 @@ N times Effective data excluding command symbols, max length 32 bytes
 //#define DEBUG
 //#define DEBUG_ANALOG
 
+#define INT_REF
+
 enum receiver_state {
   IDLE, //waiting for sync
   SYNC, //synced, waiting for STX
@@ -71,8 +73,11 @@ long shift_reg = 0;
 void ADC_setup(){
   ADCSRA =  bit (ADEN);                      // turn ADC on
   ADCSRA |= bit (ADPS0) |  bit (ADPS1) | bit (ADPS2);  // Prescaler of 128
+  #ifdef INT_REF
   ADMUX  =  bit (REFS0) | bit (REFS1);    // internal 1.1v reference
-  //ADMUX  =  bit (REFS0) ;   // external 5v reference
+  #else
+  ADMUX  =  bit (REFS0) ;   // external 5v reference
+  #endif
 }
 
 void ADC_start_conversion(int adc_pin){
