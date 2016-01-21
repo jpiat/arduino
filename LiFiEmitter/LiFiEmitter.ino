@@ -39,7 +39,11 @@ N times Effective data excluding command symbols, with N < 32
 //#define TRANSMIT_SERIAL
 
 
-#define SYMBOL_PERIOD 500
+// change to alter communication speed, 
+// will lower values will result in faster communication
+// the receiver must be tuned to the same value
+#define SYMBOL_PERIOD 500 
+
 #define WORD_LENGTH 10
 #define SYNC_SYMBOL 0xD5
 #define ETX 0x03
