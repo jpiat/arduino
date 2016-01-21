@@ -36,7 +36,7 @@ N times Effective data excluding command symbols, with N < 32
 //Start of what should be an include ...
 
 
-#define TRANSMIT_SERIAL
+//#define TRANSMIT_SERIAL
 
 
 #define SYMBOL_PERIOD 500
