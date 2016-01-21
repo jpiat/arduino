@@ -260,7 +260,7 @@ void loop() {
     #endif
     new_word = 0 ;
     if((byte_added = add_byte_to_frame(frame_buffer, &frame_index, &frame_size, &frame_state,received_data)) > 0){
-      frame_buffer[frame_size] = '\0';
+      frame_buffer[frame_size-1] = '\0';
       Serial.println(&(frame_buffer[1]));
     }
     //if(frame_state != IDLE) Serial.println(received_data, HEX);

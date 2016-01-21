@@ -35,6 +35,10 @@ N times Effective data excluding command symbols, with N < 32
 #include <util/atomic.h>
 //Start of what should be an include ...
 
+
+#define TRANSMIT_SERIAL
+
+
 #define SYMBOL_PERIOD 500
 #define WORD_LENGTH 10
 #define SYNC_SYMBOL 0xD5
@@ -56,6 +60,7 @@ N times Effective data excluding command symbols, with N < 32
 #define OUT_LED() DDRD |= ((1 << 2))
 #define SET_LED() PORTD |= ((1 << 2))
 #define CLR_LED() PORTD &= ~((1 << 2))
+
 
 
 unsigned char frame_buffer [38] ; //buffer for frame
@@ -134,6 +139,11 @@ int write(char * data, int data_size){
   return 0 ;
 }
 
+int transmitter_available(){
+  if(frame_index >=  0) return 0 ;
+  return 1 ; 
+}
+
 void init_emitter(){
   manchester_data = 0xFFFFFFFF ;
   bit_counter = WORD_LENGTH * 2 ;
@@ -153,15 +163,32 @@ void setup() {
 
 // the loop routine runs over and over again forever:
 char * msg = "Hello World" ;
+char com_buffer [32] ;
+char com_buffer_nb_bytes = 0 ;
 void loop() {
-  static int i = 0 ;
-  char com_buffer [32] ;
-  memcpy(com_buffer, msg, 11);
-  com_buffer[11] = i + '0' ;
-  if(write(com_buffer, 12) < 0){
-    delay(10);
-  }else{
-    i ++ ; 
-    if(i > 9) i = 0 ;
+  #ifdef TRANSMIT_SERIAL
+  if(Serial.available() && transmitter_available()){ //constructing the data frame only if transmitter is ready to transmit
+    char c = Serial.read();
+    com_buffer[com_buffer_nb_bytes] = c ;
+    com_buffer_nb_bytes ++ ;
+    if(com_buffer_nb_bytes >= 32 || c == '\n'){
+      if(write(com_buffer, com_buffer_nb_bytes) < 0){
+        Serial.println("Transmitter is busy");
+      }else{
+        com_buffer_nb_bytes = 0 ;
+      }
+    }
   }
+  delay(10);
+  #else
+    static int i = 0 ;
+    memcpy(com_buffer, msg, 11);
+    com_buffer[11] = i + '0' ;
+    if(write(com_buffer, 12) < 0){
+      delay(10);
+    }else{
+      i ++ ; 
+      if(i > 9) i = 0 ;
+    }
+  #endif
 }
