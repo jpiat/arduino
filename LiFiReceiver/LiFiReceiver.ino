@@ -1,4 +1,6 @@
 #include <TimerOne.h>
+#include "receiver_types.h"
+
 
 /*
 LiFi Emitter and Receiver
@@ -37,12 +39,7 @@ N times Effective data excluding command symbols, max length 32 bytes
 
 #define INT_REF
 
-enum receiver_state {
-  IDLE, //waiting for sync
-  SYNC, //synced, waiting for STX
-  START, //STX received
-  DATA //receiving DATA
-};
+
 enum receiver_state frame_state = IDLE ;
 
 //This defines receiver properties
