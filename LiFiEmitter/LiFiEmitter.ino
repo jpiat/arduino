@@ -8,7 +8,7 @@ Communication can go at up to 600bs (can depend on led quality)
 Hardware is the following :
 
 
-I/O 13 ------------- led -------------- GND
+I/O D2  ------[resistor]----- led -------------- GND
 
 Using a blue led should not require resistor, one may be needed for red or green
 
@@ -42,10 +42,10 @@ N times Effective data excluding command symbols, with N < 32
 // change to alter communication speed, 
 // will lower values will result in faster communication
 // the receiver must be tuned to the same value
-#define SYMBOL_PERIOD 500 
+#define SYMBOL_PERIOD 500 /* Defined a symbol period in us*/
 
-#define WORD_LENGTH 10
-#define SYNC_SYMBOL 0xD5
+#define WORD_LENGTH 10 /* Each byte is encoded on 10-bit with start, byte, stop */
+#define SYNC_SYMBOL 0xD5 /* Synchronization symbol to send after a preamble, before data communication happens */
 #define ETX 0x03
 #define STX 0x02
 
@@ -61,6 +61,8 @@ N times Effective data excluding command symbols, with N < 32
 #define SET_LED() PORTD |= ((1 << 2) | (1 << 3) | (1 << 4))
 #define CLR_LED() PORTD &= ~((1 << 2) | (1 << 3) | (1 << 4))
 */
+
+//These defines are for a single led connected to D2
 #define OUT_LED() DDRD |= ((1 << 2))
 #define SET_LED() PORTD |= ((1 << 2))
 #define CLR_LED() PORTD &= ~((1 << 2))
