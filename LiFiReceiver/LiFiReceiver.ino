@@ -12,7 +12,7 @@ Communication can go at up to 600bs (can depend on led quality)
 Receiver hardware :
 
          |----1Mohm-----|
-A0 ------|--- +led- ----|-------GND 
+A3 ------|--- +led- ----|-------GND 
 
 A byte is sent as follow :
 
@@ -37,7 +37,7 @@ N times Effective data excluding command symbols, max length 32 bytes
 //#define DEBUG
 //#define DEBUG_ANALOG
 
-#define INT_REF
+#define INT_REF /* Commen this to use AVCC reference voltage. To be used when the receiver LED generate low levels */
 
 
 enum receiver_state frame_state = IDLE ;
@@ -92,7 +92,7 @@ int ADC_read_conversion(){
 #define START_SYMBOL 0x02
 #define STOP_SYMBOL 0x01
 #define START_STOP_MASK  ((STOP_SYMBOL << 20) | (START_SYMBOL << 18) | STOP_SYMBOL) //STOP/START/16bits/STOP
-#define SYNC_SYMBOL_MANCHESTER  (0x6665)
+#define SYNC_SYMBOL_MANCHESTER  (0x6665) /* Sync symbol, encoded as a 16-bit Manchester value to help the decoding */
 inline int is_a_word(long  * manchester_word, int time_from_last_sync, unsigned int * detected_word){
         if(time_from_last_sync >= 20  || frame_state == IDLE){ // we received enough bits to test the sync      
             if(((*manchester_word) & START_STOP_MASK) == (START_STOP_MASK)){ // testing first position 
@@ -145,7 +145,7 @@ inline int insert_edge( long  * manchester_word, char edge, int edge_period, int
 }
 
 
-#define EDGE_THRESHOLD 4
+#define EDGE_THRESHOLD 4 /* Defines the voltage difference between two samples to detect a rising/falling edge. Can be increased depensing on the environment */
 int oldValue = 0 ;
 int steady_count = 0 ;
 int dist_last_sync = 0 ;
